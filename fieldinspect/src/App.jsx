@@ -154,7 +154,33 @@ function callAppsScript(params) {
 // --------------------------------------------------
 // MAP RECENTER
 // --------------------------------------------------
+function LocateOfficer({ position }) {
+  const map = useMap();
 
+  function locate() {
+    if (!position) {
+      alert("Waiting for GPS location. Please enable location access.");
+      return;
+    }
+
+    map.flyTo(position, 17, {
+      animate: true,
+      duration: 1.5,
+    });
+  }
+
+  return (
+    <button
+      type="button"
+      className="locate-button"
+      onClick={locate}
+      disabled={!position}
+      title="Zoom to my current location"
+    >
+      📍 My Location
+    </button>
+  );
+}
 function Recenter({ position }) {
   const map = useMap();
   const hasCentered = useRef(false);
@@ -688,6 +714,7 @@ export default function App() {
           <Recenter
             position={position}
           />
+          <LocateOfficer position={position} />
 
 
           {/* USER LOCATION */}
