@@ -2,7 +2,7 @@
 export const API_URL = "https://script.google.com/macros/s/AKfycbwrXSf-FMPa21RGqo5Qi8BZNAXcJ_W1_Z5JAbUyTOtYtHWxvA232cHEEBEmuRyIhfBQ/exec";
 
 // Coordinates are WGS84: X = longitude, Y = latitude.
-export const MAX_DISTANCE_METRES = 50;
+export const MAX_DISTANCE_METRES = 100;
 
 // GPS readings less accurate than this are rejected for attendance.
 export const MAX_GPS_ACCURACY_METRES = 25;
