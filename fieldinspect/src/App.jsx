@@ -1,58 +1,208 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Circle,
+  useMap,
+} from "react-leaflet";
 import L from "leaflet";
-import { API_URL, DEFAULT_MAP_CENTER, MAX_DISTANCE_METRES, MAX_GPS_ACCURACY_METRES } from "./config";
-import { getPoints, markAttended } from "./api";
+
+import {
+  API_URL,
+  DEFAULT_MAP_CENTER,
+  MAX_DISTANCE_METRES,
+  MAX_GPS_ACCURACY_METRES,
+} from "./config";
+
+import { getPoints } from "./api";
+
+// --------------------------------------------------
+// MAP MARKERS
+// --------------------------------------------------
 
 function markerIcon(color) {
   return L.divIcon({
     className: "custom-marker",
     html: `<span style="background:${color}"></span>`,
     iconSize: [22, 22],
-    iconAnchor: [11, 11]
+    iconAnchor: [11, 11],
   });
 }
+
 const pendingIcon = markerIcon("#dc3545");
+
 const userIcon = L.divIcon({
   className: "user-marker",
-  html: '<span></span>',
+  html: "<span></span>",
   iconSize: [22, 22],
-  iconAnchor: [11, 11]
+  iconAnchor: [11, 11],
 });
+
+// --------------------------------------------------
+// INSPECTION OPTIONS
+// --------------------------------------------------
+
+const NATURE_OPTIONS = ["Good", "Fair", "Bad"];
+
+const ACTION_OPTIONS = [
+  "Upnormal",
+  "Normal",
+  "Needs Upgrade",
+  "To Be Discontinued",
+];
+
+// --------------------------------------------------
+// JSONP CONNECTION TO GOOGLE APPS SCRIPT
+// --------------------------------------------------
+
+function callAppsScript(params) {
+  return new Promise((resolve, reject) => {
+    if (!API_URL || API_URL.includes("PASTE_")) {
+      reject(new Error("Configure your Apps Script URL in src/config.js."));
+      return;
+    }
+
+    const callbackName =
+      "fieldInspectionCallback_" +
+      Date.now() +
+      "_" +
+      Math.random().toString(36).substring(2);
+
+    const script = document.createElement("script");
+    const url = new URL(API_URL);
+
+    url.search = new URLSearchParams({
+      ...params,
+      callback: callbackName,
+    }).toString();
+
+    let timeout;
+
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+      clearTimeout(timeout);
+    };
+
+    window[callbackName] = (response) => {
+      cleanup();
+
+      if (!response) {
+        reject(new Error("No response received from Google Apps Script."));
+        return;
+      }
+
+      if (response.success === false || response.error) {
+        reject(new Error(response.error || response.message || "Request failed."));
+        return;
+      }
+
+      resolve(response);
+    };
+
+    script.onerror = () => {
+      cleanup();
+      reject(
+        new Error(
+          "Could not connect to Google Apps Script. Check the URL and deployment access."
+        )
+      );
+    };
+
+    timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Request timed out. Check your internet connection."));
+    }, 20000);
+
+    script.src = url.toString();
+    document.body.appendChild(script);
+  });
+}
+
+// --------------------------------------------------
+// DISTANCE CALCULATION
+// --------------------------------------------------
 
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371000;
-  const rad = (d) => d * Math.PI / 180;
+  const rad = (d) => (d * Math.PI) / 180;
+
   const dLat = rad(lat2 - lat1);
   const dLon = rad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLon / 2) ** 2;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(lat1)) *
+      Math.cos(rad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// --------------------------------------------------
+// MAP RECENTER
+// --------------------------------------------------
+
 function Recenter({ position }) {
   const map = useMap();
-  useEffect(() => { if (position) map.setView(position, Math.max(map.getZoom(), 16)); }, [position, map]);
+
+  useEffect(() => {
+    if (position) {
+      map.setView(position, Math.max(map.getZoom(), 16));
+    }
+  }, [position, map]);
+
   return null;
 }
+
+// --------------------------------------------------
+// MAIN APP
+// --------------------------------------------------
 
 export default function App() {
   const [points, setPoints] = useState([]);
   const [position, setPosition] = useState(null);
   const [accuracy, setAccuracy] = useState(null);
   const [selected, setSelected] = useState(null);
-  const [officer, setOfficer] = useState(localStorage.getItem("fieldOfficer") || "");
+
+  // Officer details
+  const [officers, setOfficers] = useState([]);
+  const [officer, setOfficer] = useState(
+    localStorage.getItem("fieldOfficer") || ""
+  );
+
+  // Inspection fields
+  const [natureOfWork, setNatureOfWork] = useState("");
+  const [inspection1, setInspection1] = useState("");
+  const [inspection2, setInspection2] = useState("");
+  const [inspection3, setInspection3] = useState("");
+  const [actions, setActions] = useState([]);
   const [comments, setComments] = useState("");
+
+  // App status
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadingOfficers, setLoadingOfficers] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [lastRefresh, setLastRefresh] = useState(null);
 
+  // ------------------------------------------------
+  // LOAD INSPECTION POINTS
+  // ------------------------------------------------
+
   async function refresh() {
     try {
       const rows = await getPoints();
-      setPoints(rows.filter(p => p.status.toLowerCase() !== "attended"));
+
+      setPoints(
+        rows.filter(
+          (p) => String(p.status || "").toLowerCase() !== "attended"
+        )
+      );
+
       setLastRefresh(new Date());
       setError("");
     } catch (e) {
@@ -64,59 +214,193 @@ export default function App() {
 
   useEffect(() => {
     refresh();
+
     const id = window.setInterval(refresh, 30000);
+
     return () => window.clearInterval(id);
   }, []);
+
+  // ------------------------------------------------
+  // LOAD OFFICERS FROM GOOGLE SHEETS
+  // ------------------------------------------------
+
+  async function loadOfficers() {
+    try {
+      setLoadingOfficers(true);
+
+      const response = await callAppsScript({
+        action: "officers",
+      });
+
+      const names = response.officers || response.data || [];
+
+      setOfficers(
+        names.map((item) =>
+          typeof item === "string"
+            ? item
+            : item.name || item.officerName || item.officer_name
+        ).filter(Boolean)
+      );
+    } catch (e) {
+      setError(`Could not load officers: ${e.message}`);
+    } finally {
+      setLoadingOfficers(false);
+    }
+  }
+
+  useEffect(() => {
+    loadOfficers();
+  }, []);
+
+  // ------------------------------------------------
+  // TRACK GPS LOCATION
+  // ------------------------------------------------
 
   useEffect(() => {
     if (!navigator.geolocation) {
       setError("This browser does not support GPS location.");
       return;
     }
+
     const watchId = navigator.geolocation.watchPosition(
       (p) => {
         setPosition([p.coords.latitude, p.coords.longitude]);
         setAccuracy(p.coords.accuracy);
       },
-      (e) => setError(`GPS error: ${e.message}. Allow location access and use HTTPS.`),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+      (e) =>
+        setError(
+          `GPS error: ${e.message}. Allow location access and use HTTPS.`
+        ),
+      {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 20000,
+      }
     );
+
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
+  // ------------------------------------------------
+  // DISTANCE AND GPS VALIDATION
+  // ------------------------------------------------
+
   const selectedDistance = useMemo(() => {
     if (!selected || !position) return null;
-    return haversine(position[0], position[1], selected.y, selected.x);
+
+    return haversine(
+      position[0],
+      position[1],
+      selected.y,
+      selected.x
+    );
   }, [selected, position]);
 
-  const gpsAccurate = accuracy !== null && accuracy <= MAX_GPS_ACCURACY_METRES;
-  const withinRange = selectedDistance !== null && selectedDistance <= MAX_DISTANCE_METRES && gpsAccurate;
+  const gpsAccurate =
+    accuracy !== null && accuracy <= MAX_GPS_ACCURACY_METRES;
+
+  const withinRange =
+    selectedDistance !== null &&
+    selectedDistance <= MAX_DISTANCE_METRES &&
+    gpsAccurate;
+
   const mapCenter = position || DEFAULT_MAP_CENTER;
+
+  // ------------------------------------------------
+  // RESET INSPECTION FORM
+  // ------------------------------------------------
+
+  function resetInspectionForm() {
+    setNatureOfWork("");
+    setInspection1("");
+    setInspection2("");
+    setInspection3("");
+    setActions([]);
+    setComments("");
+  }
 
   function openPoint(point) {
     setSelected(point);
-    setComments("");
+    resetInspectionForm();
     setNotice("");
+    setError("");
   }
 
+  // ------------------------------------------------
+  // ACTION CHECKBOX HANDLER
+  // ------------------------------------------------
+
+  function handleActionChange(action) {
+    setActions((current) =>
+      current.includes(action)
+        ? current.filter((item) => item !== action)
+        : [...current, action]
+    );
+  }
+
+  // ------------------------------------------------
+  // SAVE INSPECTION
+  // ------------------------------------------------
+
   async function saveAttendance() {
-    if (!selected || !position || !withinRange || !officer.trim()) return;
+    if (!selected || !position || !withinRange || !officer.trim()) {
+      return;
+    }
+
+    if (!natureOfWork) {
+      setError("Please select the nature of work.");
+      return;
+    }
+
+    if (actions.length === 0) {
+      setError("Please select at least one action.");
+      return;
+    }
+
     setSaving(true);
     setError("");
+    setNotice("");
+
     try {
       localStorage.setItem("fieldOfficer", officer.trim());
-      await markAttended({
+
+      await callAppsScript({
+        action: "attend",
+
         taskId: selected.taskId,
-        latitude: position[0],
-        longitude: position[1],
-        accuracy,
         officer: officer.trim(),
-        comments: comments.trim()
+
+        natureOfWork,
+
+        inspection1: inspection1.trim(),
+        inspection2: inspection2.trim(),
+        inspection3: inspection3.trim(),
+
+        // Apps Script receives the selected actions as comma-separated text.
+        actions: actions.join(","),
+
+        comments: comments.trim(),
+
+        gpsLat: String(position[0]),
+        gpsLng: String(position[1]),
+        gpsAccuracy: String(accuracy),
       });
-      setPoints(current => current.filter(p => p.taskId !== selected.taskId));
+
+      const completedTask = selected.taskId;
+
+      setPoints((current) =>
+        current.filter((p) => p.taskId !== completedTask)
+      );
+
       setSelected(null);
-      setNotice(`Task ${selected.taskId} marked as attended. It has been removed from the active map.`);
-      setComments("");
+      resetInspectionForm();
+
+      setNotice(
+        `Task ${completedTask} successfully marked as attended.`
+      );
+
+      // Refresh from the spreadsheet to confirm the latest data.
+      await refresh();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -124,9 +408,17 @@ export default function App() {
     }
   }
 
+  // ------------------------------------------------
+  // GOOGLE MAPS DIRECTIONS
+  // ------------------------------------------------
+
   const directionsUrl = selected
     ? `https://www.google.com/maps/dir/?api=1&destination=${selected.y},${selected.x}&travelmode=walking`
     : null;
+
+  // ------------------------------------------------
+  // USER INTERFACE
+  // ------------------------------------------------
 
   return (
     <main className="app-shell">
@@ -134,80 +426,365 @@ export default function App() {
         <div>
           <div className="eyebrow">FIELD OPERATIONS</div>
           <h1>Inspection Map</h1>
-          <p>Navigate to assigned points and record attendance.</p>
+          <p>Navigate to assigned points and record inspection details.</p>
         </div>
-        <button className="refresh" onClick={refresh}>↻ Refresh</button>
+
+        <button className="refresh" onClick={refresh}>
+          ↻ Refresh
+        </button>
       </header>
 
+      {/* SUMMARY */}
       <section className="summary">
-        <div className="metric"><strong>{points.length}</strong><span>Active points</span></div>
-        <div className="metric"><strong>{position ? "GPS on" : "Waiting"}</strong><span>Officer location</span></div>
-        <div className="metric"><strong>{accuracy == null ? "—" : `${Math.round(accuracy)} m`}</strong><span>GPS accuracy</span></div>
+        <div className="metric">
+          <strong>{points.length}</strong>
+          <span>Active points</span>
+        </div>
+
+        <div className="metric">
+          <strong>{position ? "GPS on" : "Waiting"}</strong>
+          <span>Officer location</span>
+        </div>
+
+        <div className="metric">
+          <strong>
+            {accuracy == null ? "—" : `${Math.round(accuracy)} m`}
+          </strong>
+          <span>GPS accuracy</span>
+        </div>
       </section>
 
+      {/* ALERTS */}
       {error && <div className="alert error">{error}</div>}
       {notice && <div className="alert success">{notice}</div>}
-      {API_URL.includes("PASTE_") && <div className="alert warning">Configure the Apps Script URL in <code>src/config.js</code> before using the map.</div>}
 
+      {API_URL.includes("PASTE_") && (
+        <div className="alert warning">
+          Configure the Apps Script URL in <code>src/config.js</code> before
+          using the map.
+        </div>
+      )}
+
+      {/* MAP */}
       <section className="map-wrap">
         <MapContainer center={mapCenter} zoom={13} scrollWheelZoom>
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+
           <Recenter position={position} />
-          {position && <>
-            <Marker position={position} icon={userIcon}>
-              <Popup><b>Your current location</b><br/>GPS accuracy: {Math.round(accuracy || 0)} m</Popup>
-            </Marker>
-            <Circle center={position} radius={MAX_DISTANCE_METRES} pathOptions={{ color: "#1684d8", fillOpacity: 0.06 }} />
-          </>}
-          {points.map(point => (
-            <Marker key={point.taskId} position={[point.y, point.x]} icon={pendingIcon} eventHandlers={{ click: () => openPoint(point) }}>
+
+          {position && (
+            <>
+              <Marker position={position} icon={userIcon}>
+                <Popup>
+                  <b>Your current location</b>
+                  <br />
+                  GPS accuracy: {Math.round(accuracy || 0)} m
+                </Popup>
+              </Marker>
+
+              <Circle
+                center={position}
+                radius={MAX_DISTANCE_METRES}
+                pathOptions={{
+                  color: "#1684d8",
+                  fillOpacity: 0.06,
+                }}
+              />
+            </>
+          )}
+
+          {points.map((point) => (
+            <Marker
+              key={point.taskId}
+              position={[point.y, point.x]}
+              icon={pendingIcon}
+              eventHandlers={{
+                click: () => openPoint(point),
+              }}
+            >
               <Popup>
-                <b>{point.taskId}</b><br/>
-                {point.name || "Inspection point"}<br/>
-                <button className="popup-button" onClick={() => openPoint(point)}>View task</button>
+                <b>{point.taskId}</b>
+                <br />
+                {point.name || "Inspection point"}
+                <br />
+                <button
+                  className="popup-button"
+                  onClick={() => openPoint(point)}
+                >
+                  View task
+                </button>
               </Popup>
             </Marker>
           ))}
         </MapContainer>
+
         <div className="legend">
-          <span><i className="dot red"></i> Pending</span>
-          <span><i className="dot blue"></i> Your location</span>
-          <span><i className="ring"></i> 50 m attendance boundary</span>
+          <span>
+            <i className="dot red"></i> Pending
+          </span>
+
+          <span>
+            <i className="dot blue"></i> Your location
+          </span>
+
+          <span>
+            <i className="ring"></i> 50 m attendance boundary
+          </span>
         </div>
       </section>
 
+      {/* INSPECTION FORM */}
       <section className="bottom-panel">
         <div className="panel-heading">
-          <div><h2>{selected ? `Task ${selected.taskId}` : "Selected inspection"}</h2><p>{selected ? (selected.name || "Inspection location") : "Select a red marker on the map to view its details."}</p></div>
-          {selected && <button className="close" onClick={() => setSelected(null)}>×</button>}
+          <div>
+            <h2>
+              {selected ? `Task ${selected.taskId}` : "Selected inspection"}
+            </h2>
+
+            <p>
+              {selected
+                ? selected.name || "Inspection location"
+                : "Select a red marker on the map to view its details."}
+            </p>
+          </div>
+
+          {selected && (
+            <button
+              className="close"
+              onClick={() => {
+                setSelected(null);
+                resetInspectionForm();
+              }}
+            >
+              ×
+            </button>
+          )}
         </div>
 
-        {selected ? <>
-          <div className="details-grid">
-            <div><small>Longitude (X)</small><b>{selected.x}</b></div>
-            <div><small>Latitude (Y)</small><b>{selected.y}</b></div>
-            <div><small>Distance</small><b>{selectedDistance == null ? "Waiting for GPS" : `${Math.round(selectedDistance)} m`}</b></div>
-            <div><small>GPS accuracy</small><b>{accuracy == null ? "—" : `${Math.round(accuracy)} m`}</b></div>
+        {selected ? (
+          <>
+            {/* LOCATION DETAILS */}
+            <div className="details-grid">
+              <div>
+                <small>Longitude (X)</small>
+                <b>{selected.x}</b>
+              </div>
+
+              <div>
+                <small>Latitude (Y)</small>
+                <b>{selected.y}</b>
+              </div>
+
+              <div>
+                <small>Distance</small>
+                <b>
+                  {selectedDistance == null
+                    ? "Waiting for GPS"
+                    : `${Math.round(selectedDistance)} m`}
+                </b>
+              </div>
+
+              <div>
+                <small>GPS accuracy</small>
+                <b>
+                  {accuracy == null ? "—" : `${Math.round(accuracy)} m`}
+                </b>
+              </div>
+            </div>
+
+            <a
+              className="directions"
+              href={directionsUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              ↗ Navigate with Google Maps
+            </a>
+
+            {/* OFFICER DROPDOWN */}
+            <label className="field-label" htmlFor="officer">
+              Officer name
+            </label>
+
+            <select
+              id="officer"
+              value={officer}
+              onChange={(e) => setOfficer(e.target.value)}
+              disabled={loadingOfficers}
+            >
+              <option value="">
+                {loadingOfficers
+                  ? "Loading officers..."
+                  : "Select your name"}
+              </option>
+
+              {officers.map((name, index) => (
+                <option key={`${name}-${index}`} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+
+            {!loadingOfficers && officers.length === 0 && (
+              <div className="alert warning">
+                No officers were returned. Check the Officers sheet and the
+                Apps Script officers endpoint.
+              </div>
+            )}
+
+            {/* NATURE OF WORK */}
+            <label className="field-label" htmlFor="natureOfWork">
+              Nature of Work
+            </label>
+
+            <select
+              id="natureOfWork"
+              value={natureOfWork}
+              onChange={(e) => setNatureOfWork(e.target.value)}
+            >
+              <option value="">Select nature of work</option>
+
+              {NATURE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+
+            {/* INSPECTION COMMENTS */}
+            <label className="field-label" htmlFor="inspection1">
+              Inspection Comments 1
+            </label>
+
+            <textarea
+              id="inspection1"
+              rows="2"
+              value={inspection1}
+              onChange={(e) => setInspection1(e.target.value)}
+              placeholder="Enter first inspection observation..."
+            />
+
+            <label className="field-label" htmlFor="inspection2">
+              Inspection Comments 2
+            </label>
+
+            <textarea
+              id="inspection2"
+              rows="2"
+              value={inspection2}
+              onChange={(e) => setInspection2(e.target.value)}
+              placeholder="Enter second inspection observation..."
+            />
+
+            <label className="field-label" htmlFor="inspection3">
+              Inspection Comments 3
+            </label>
+
+            <textarea
+              id="inspection3"
+              rows="2"
+              value={inspection3}
+              onChange={(e) => setInspection3(e.target.value)}
+              placeholder="Enter third inspection observation..."
+            />
+
+            {/* ACTION CHECKBOXES */}
+            <label className="field-label">
+              Recommended Action
+            </label>
+
+            <div className="action-options">
+              {ACTION_OPTIONS.map((action) => (
+                <label key={action} className="action-option">
+                  <input
+                    type="checkbox"
+                    checked={actions.includes(action)}
+                    onChange={() => handleActionChange(action)}
+                  />
+
+                  <span>{action}</span>
+                </label>
+              ))}
+            </div>
+
+            {/* ADDITIONAL COMMENTS */}
+            <label className="field-label" htmlFor="comments">
+              Additional Comments (Optional)
+            </label>
+
+            <textarea
+              id="comments"
+              rows="3"
+              value={comments}
+              onChange={(e) => setComments(e.target.value)}
+              placeholder="Any other findings or observations..."
+            />
+
+            {/* GPS VALIDATION */}
+            {!position && (
+              <div className="alert warning">
+                Waiting for GPS. Allow location permission on your device.
+              </div>
+            )}
+
+            {position && !gpsAccurate && (
+              <div className="alert warning">
+                GPS accuracy must be 25 m or better. Current accuracy:{" "}
+                {Math.round(accuracy)} m. Move to an open area and wait for a
+                better GPS fix.
+              </div>
+            )}
+
+            {position && gpsAccurate && !withinRange && (
+              <div className="alert warning">
+                You are outside the 50 m attendance boundary. Current
+                distance: {Math.round(selectedDistance)} m.
+              </div>
+            )}
+
+            {withinRange && (
+              <div className="alert success">
+                You are within 50 metres. Attendance update is enabled.
+              </div>
+            )}
+
+            {/* SUBMIT */}
+            <button
+              className="attend"
+              disabled={
+                !withinRange ||
+                !officer.trim() ||
+                !natureOfWork ||
+                actions.length === 0 ||
+                saving
+              }
+              onClick={saveAttendance}
+            >
+              {saving ? "Saving..." : "✓ Submit Inspection"}
+            </button>
+
+            <p className="fine-print">
+              The server rechecks your GPS distance before updating the
+              spreadsheet. Submitted points are removed from the active map.
+            </p>
+          </>
+        ) : (
+          <div className="empty-state">
+            {loading
+              ? "Loading locations from Google Sheets…"
+              : `${points.length} pending locations are currently displayed.`}
           </div>
-          <a className="directions" href={directionsUrl} target="_blank" rel="noreferrer">↗ Navigate with Google Maps</a>
-          <label className="field-label" htmlFor="officer">Officer name / ID</label>
-          <input id="officer" value={officer} onChange={e => setOfficer(e.target.value)} placeholder="Enter your name or officer ID"/>
-          <label className="field-label" htmlFor="comments">Inspection comments</label>
-          <textarea id="comments" rows="3" value={comments} onChange={e => setComments(e.target.value)} placeholder="Record findings or observations..."/>
-          {!position && <div className="alert warning">Waiting for GPS. Allow location permission on your device.</div>}
-          {position && !gpsAccurate && <div className="alert warning">GPS accuracy must be 25 m or better. Current accuracy: {Math.round(accuracy)} m. Move to an open area and wait for a better GPS fix.</div>}
-          {position && gpsAccurate && !withinRange && <div className="alert warning">You are outside the 50 m attendance boundary. Current distance: {Math.round(selectedDistance)} m.</div>}
-          {withinRange && <div className="alert success">You are within 50 metres. Attendance update is enabled.</div>}
-          <button className="attend" disabled={!withinRange || !officer.trim() || saving} onClick={saveAttendance}>
-            {saving ? "Saving..." : "✓ Mark as attended"}
-          </button>
-          <p className="fine-print">The server rechecks your GPS distance before updating the sheet. Attended points are removed from the active map.</p>
-        </> : <div className="empty-state">{loading ? "Loading locations from Google Sheets…" : `${points.length} pending locations are currently displayed.`}</div>}
+        )}
       </section>
-      <footer>Last refreshed: {lastRefresh ? lastRefresh.toLocaleTimeString() : "Not yet refreshed"} · Map refreshes every 30 seconds</footer>
+
+      <footer>
+        Last refreshed:{" "}
+        {lastRefresh ? lastRefresh.toLocaleTimeString() : "Not yet refreshed"}{" "}
+        · Map refreshes every 30 seconds
+      </footer>
     </main>
   );
 }
