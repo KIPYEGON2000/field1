@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -157,13 +157,12 @@ function callAppsScript(params) {
 
 function Recenter({ position }) {
   const map = useMap();
+  const hasCentered = useRef(false);
 
   useEffect(() => {
-    if (position) {
-      map.setView(
-        position,
-        Math.max(map.getZoom(), 16)
-      );
+    if (position && !hasCentered.current) {
+      map.setView(position, 16);
+      hasCentered.current = true;
     }
   }, [position, map]);
 
@@ -978,7 +977,7 @@ export default function App() {
               className="field-label"
               htmlFor="inspection2"
             >
-              1.8.2
+              1.8.1
             </label>
 
             <textarea
@@ -1000,7 +999,7 @@ export default function App() {
               className="field-label"
               htmlFor="inspection3"
             >
-              1.8.3
+              1.8.2
             </label>
 
             <textarea
