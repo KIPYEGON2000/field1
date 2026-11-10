@@ -5,7 +5,7 @@ export const API_URL = "https://script.google.com/macros/s/AKfycbwrXSf-FMPa21RGq
 export const MAX_DISTANCE_METRES = 100;
 
 // GPS readings less accurate than this are rejected for attendance.
-export const MAX_GPS_ACCURACY_METRES = 25;
+export const MAX_GPS_ACCURACY_METRES = 100;
 
 // Optional default map centre before the officer GPS fix is available.
 export const DEFAULT_MAP_CENTER = [-0.367, 35.283];
