@@ -10,11 +10,11 @@ import {
 } from "react-leaflet";
 
 import L from "leaflet";
-MAX_GPS_ACCURACY_METRES=100
+
 import {
   API_URL,
   DEFAULT_MAP_CENTER,
-  
+  MAX_GPS_ACCURACY_METRES
 } from "./config";
 
 import { getPoints } from "./api";
